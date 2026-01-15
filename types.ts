@@ -22,9 +22,14 @@ export interface Anomaly {
   boundingBox?: [number, number, number, number]; // [ymin, xmin, ymax, xmax] normalized 0-1000
 }
 
+export interface ApiSettings {
+  mode: 'sdk' | 'custom';
+  customEndpoint: string;
+}
+
 export interface InspectionImage {
   id: string;
-  file: File;
+  file?: File;
   previewUrl: string;
   status: 'pending' | 'processing' | 'completed' | 'error';
   results?: {

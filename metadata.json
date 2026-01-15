@@ -2,6 +2,8 @@
   "name": "DroneGuard: Inspeção de Linhas de Transmissão",
   "description": "Uma plataforma de IA avançada para análise automatizada de imagens de drones em redes elétricas, detectando cabos soltos, parafusos frouxos e fissuras estruturais.",
   "requestFramePermissions": [
-    "camera"
-  ]
+    "camera",
+    "microphone"
+  ],
+  "requestNotificationPermission": true
 }

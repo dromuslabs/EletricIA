@@ -30,18 +30,29 @@ const InspectionCard: React.FC<InspectionCardProps> = ({ image }) => {
   };
 
   const hasGeo = image.status === 'completed' && image.results?.latitude && image.results?.longitude;
+  const isFromHistory = !image.file && !image.previewUrl;
 
   return (
-    <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden flex flex-col hover:shadow-md transition-shadow group">
+    <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden flex flex-col hover:shadow-md transition-shadow group relative">
       <div className="relative h-56 w-full bg-slate-100 overflow-hidden">
-        <img 
-          src={image.previewUrl} 
-          alt="Inspection thumbnail" 
-          className="h-full w-full object-cover"
-        />
+        {isFromHistory ? (
+          <div className="h-full w-full flex flex-col items-center justify-center bg-slate-200 text-slate-400 p-4 text-center">
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-10 w-10 mb-2 opacity-50" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+            </svg>
+            <span className="text-[10px] font-bold uppercase tracking-wider">Histórico</span>
+            <span className="text-[8px] mt-1 leading-tight">Foto indisponível na sessão atual</span>
+          </div>
+        ) : (
+          <img 
+            src={image.previewUrl} 
+            alt="Inspection thumbnail" 
+            className="h-full w-full object-cover"
+          />
+        )}
         
         {/* Visual Markers Layer */}
-        {image.status === 'completed' && image.results?.foundAnomalies.map((anomaly, idx) => (
+        {!isFromHistory && image.status === 'completed' && image.results?.foundAnomalies.map((anomaly, idx) => (
           anomaly.boundingBox && (
             <div
               key={idx}
@@ -74,7 +85,7 @@ const InspectionCard: React.FC<InspectionCardProps> = ({ image }) => {
             )}
             {hasGeo && (
               <span className="bg-blue-600/80 text-white text-[9px] px-1.5 py-0.5 rounded font-medium backdrop-blur-sm flex items-center gap-1">
-                📍 {image.results?.latitude.substring(0, 8)}...
+                📍 GPS
               </span>
             )}
           </div>
@@ -95,67 +106,62 @@ const InspectionCard: React.FC<InspectionCardProps> = ({ image }) => {
 
       <div className="p-4 flex-1 flex flex-col">
         <h3 className="text-sm font-semibold text-slate-800 truncate mb-1">
-          {image.file.name}
+          {image.id.toUpperCase()}
         </h3>
         
         {image.status === 'pending' && (
-          <p className="text-xs text-slate-500 italic">Aguardando processamento...</p>
+          <p className="text-xs text-slate-500 italic">Aguardando...</p>
         )}
         
         {image.status === 'error' && (
-          <p className="text-xs text-red-600">{image.error || 'Erro ao processar'}</p>
+          <p className="text-[10px] leading-tight text-red-600 bg-red-50 p-1.5 rounded border border-red-100">{image.error || 'Erro no processamento'}</p>
         )}
 
         {image.status === 'completed' && image.results && (
           <div className="space-y-3">
-            <p className="text-xs text-slate-600 line-clamp-2 italic border-l-2 border-slate-200 pl-2">
+            <p className="text-[11px] text-slate-600 line-clamp-2 italic border-l-2 border-slate-200 pl-2 leading-snug">
               "{image.results.summary}"
             </p>
             
             <div className="space-y-1.5">
-              {image.results.foundAnomalies.map((anomaly, idx) => (
+              {image.results.foundAnomalies.slice(0, 3).map((anomaly, idx) => (
                 <div 
                   key={idx} 
-                  className={`flex items-start justify-between gap-2 p-1.5 rounded-md border border-transparent transition-colors
-                    ${hoveredAnomaly === anomaly ? 'bg-slate-50 border-slate-200' : ''}
+                  className={`flex items-start justify-between gap-2 p-1 rounded transition-colors
+                    ${hoveredAnomaly === anomaly ? 'bg-slate-50' : ''}
                   `}
                   onMouseEnter={() => setHoveredAnomaly(anomaly)}
                   onMouseLeave={() => setHoveredAnomaly(null)}
                 >
                   <div className="flex-1 min-w-0">
-                    <p className="text-[11px] font-bold text-slate-700 truncate">
+                    <p className="text-[10px] font-bold text-slate-700 truncate">
                       {anomaly.type}
                     </p>
-                    <p className="text-[10px] text-slate-500 truncate">
-                      {anomaly.location_hint || 'Localização identificada'}
-                    </p>
                   </div>
-                  <span className={`text-[9px] px-1.5 py-0.5 rounded font-bold uppercase shrink-0 ${getSeverityColor(anomaly.severity)}`}>
+                  <span className={`text-[8px] px-1 py-0.5 rounded font-bold uppercase shrink-0 ${getSeverityColor(anomaly.severity)}`}>
                     {anomaly.severity}
                   </span>
                 </div>
               ))}
-              {image.results.foundAnomalies.length === 0 && (
-                <p className="text-[11px] text-green-600 font-medium">Nenhum problema detectado.</p>
+              {image.results.foundAnomalies.length > 3 && (
+                <p className="text-[9px] text-slate-400 font-medium text-center">+{image.results.foundAnomalies.length - 3} itens não listados</p>
               )}
             </div>
             
             <div className="mt-auto pt-2 border-t border-slate-100 flex items-center justify-between">
-              <span className="text-[10px] text-slate-400">
-                {(image.file.size / 1024 / 1024).toFixed(2)} MB
-              </span>
               {hasGeo ? (
                 <a 
                   href={`https://www.google.com/maps?q=${image.results.latitude},${image.results.longitude}`} 
                   target="_blank"
                   className="text-blue-600 hover:text-blue-800 text-[10px] font-bold uppercase tracking-wider flex items-center gap-1"
                 >
-                  📍 Ver Mapa
+                  Ver Mapa
                 </a>
               ) : (
-                <button className="text-slate-400 text-[10px] font-bold uppercase tracking-wider">
-                  Sem GPS
-                </button>
+                <span className="text-slate-300 text-[9px] uppercase font-bold">Sem Localização</span>
+              )}
+              {isFromHistory && (
+                <span className="text-[8px] font-bold text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded">HISTÓRICO</span>
               )}
             </div>
           </div>
