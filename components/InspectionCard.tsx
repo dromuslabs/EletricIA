@@ -1,13 +1,17 @@
 
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { InspectionImage, Severity, Anomaly } from '../types';
 
 interface InspectionCardProps {
   image: InspectionImage;
 }
 
+declare const L: any; // Global Leaflet object from CDN
+
 const InspectionCard: React.FC<InspectionCardProps> = ({ image }) => {
   const [hoveredAnomaly, setHoveredAnomaly] = useState<Anomaly | null>(null);
+  const mapContainerRef = useRef<HTMLDivElement>(null);
+  const mapInstanceRef = useRef<any>(null);
 
   const getSeverityColor = (severity: Severity) => {
     switch (severity) {
@@ -31,6 +35,43 @@ const InspectionCard: React.FC<InspectionCardProps> = ({ image }) => {
 
   const hasGeo = image.status === 'completed' && image.results?.latitude && image.results?.longitude;
   const isFromHistory = !image.file && !image.previewUrl;
+
+  // Lógica de Inicialização do Mapa
+  useEffect(() => {
+    if (hasGeo && mapContainerRef.current && !mapInstanceRef.current) {
+      const lat = parseFloat(image.results!.latitude!);
+      const lng = parseFloat(image.results!.longitude!);
+
+      if (!isNaN(lat) && !isNaN(lng)) {
+        // Inicializa o mapa focado nas coordenadas
+        mapInstanceRef.current = L.map(mapContainerRef.current, {
+          center: [lat, lng],
+          zoom: 15,
+          zoomControl: false,
+          scrollWheelZoom: false,
+          dragging: true,
+          attributionControl: false
+        });
+
+        // Adiciona camada de tiles OpenStreetMap
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(mapInstanceRef.current);
+
+        // Adiciona um marcador personalizado
+        const marker = L.marker([lat, lng]).addTo(mapInstanceRef.current);
+        
+        // Popup com o nome da linha ou ID da inspeção
+        marker.bindPopup(`<b>${image.results?.lineName || 'Inspeção'}</b><br>${image.id}`).openPopup();
+      }
+    }
+
+    // Cleanup: Destruir mapa ao desmontar componente
+    return () => {
+      if (mapInstanceRef.current) {
+        mapInstanceRef.current.remove();
+        mapInstanceRef.current = null;
+      }
+    };
+  }, [hasGeo, image.results, image.id]);
 
   return (
     <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden flex flex-col hover:shadow-md transition-shadow group relative">
@@ -85,7 +126,7 @@ const InspectionCard: React.FC<InspectionCardProps> = ({ image }) => {
             )}
             {hasGeo && (
               <span className="bg-blue-600/80 text-white text-[9px] px-1.5 py-0.5 rounded font-medium backdrop-blur-sm flex items-center gap-1">
-                📍 GPS
+                📍 Ativo GPS
               </span>
             )}
           </div>
@@ -144,24 +185,36 @@ const InspectionCard: React.FC<InspectionCardProps> = ({ image }) => {
                 </div>
               ))}
               {image.results.foundAnomalies.length > 3 && (
-                <p className="text-[9px] text-slate-400 font-medium text-center">+{image.results.foundAnomalies.length - 3} itens não listados</p>
+                <p className="text-[9px] text-slate-400 font-medium text-center">+{image.results.foundAnomalies.length - 3} itens</p>
               )}
             </div>
             
-            <div className="mt-auto pt-2 border-t border-slate-100 flex items-center justify-between">
+            {/* Mapa Interativo em substituição ao link */}
+            <div className="mt-auto pt-2 border-t border-slate-100 flex flex-col gap-2">
               {hasGeo ? (
-                <a 
-                  href={`https://www.google.com/maps?q=${image.results.latitude},${image.results.longitude}`} 
-                  target="_blank"
-                  className="text-blue-600 hover:text-blue-800 text-[10px] font-bold uppercase tracking-wider flex items-center gap-1"
-                >
-                  Ver Mapa
-                </a>
+                <div className="space-y-2">
+                  <div className="flex justify-between items-center">
+                    <span className="text-[9px] font-bold text-slate-400 uppercase tracking-tight">Geolocalização</span>
+                    <a 
+                      href={`https://www.google.com/maps?q=${image.results.latitude},${image.results.longitude}`} 
+                      target="_blank"
+                      className="text-blue-600 text-[9px] hover:underline"
+                    >
+                      Abrir no Google Maps
+                    </a>
+                  </div>
+                  <div 
+                    ref={mapContainerRef} 
+                    className="h-28 w-full rounded-lg border border-slate-200 shadow-inner bg-slate-50"
+                  />
+                </div>
               ) : (
-                <span className="text-slate-300 text-[9px] uppercase font-bold">Sem Localização</span>
-              )}
-              {isFromHistory && (
-                <span className="text-[8px] font-bold text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded">HISTÓRICO</span>
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-300 text-[9px] uppercase font-bold">Sem Localização</span>
+                  {isFromHistory && (
+                    <span className="text-[8px] font-bold text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded">HISTÓRICO</span>
+                  )}
+                </div>
               )}
             </div>
           </div>
