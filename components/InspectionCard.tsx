@@ -4,11 +4,12 @@ import { InspectionImage, Severity, Anomaly } from '../types';
 
 interface InspectionCardProps {
   image: InspectionImage;
+  onRetry?: (id: string) => void;
 }
 
 declare const L: any; // Global Leaflet object from CDN
 
-const InspectionCard: React.FC<InspectionCardProps> = ({ image }) => {
+const InspectionCard: React.FC<InspectionCardProps> = ({ image, onRetry }) => {
   const [hoveredAnomaly, setHoveredAnomaly] = useState<Anomaly | null>(null);
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<any>(null);
@@ -36,14 +37,12 @@ const InspectionCard: React.FC<InspectionCardProps> = ({ image }) => {
   const hasGeo = image.status === 'completed' && image.results?.latitude && image.results?.longitude;
   const isFromHistory = !image.file && !image.previewUrl;
 
-  // Lógica de Inicialização do Mapa
   useEffect(() => {
     if (hasGeo && mapContainerRef.current && !mapInstanceRef.current) {
       const lat = parseFloat(image.results!.latitude!);
       const lng = parseFloat(image.results!.longitude!);
 
       if (!isNaN(lat) && !isNaN(lng)) {
-        // Inicializa o mapa focado nas coordenadas
         mapInstanceRef.current = L.map(mapContainerRef.current, {
           center: [lat, lng],
           zoom: 15,
@@ -53,18 +52,12 @@ const InspectionCard: React.FC<InspectionCardProps> = ({ image }) => {
           attributionControl: false
         });
 
-        // Adiciona camada de tiles OpenStreetMap
         L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(mapInstanceRef.current);
-
-        // Adiciona um marcador personalizado
         const marker = L.marker([lat, lng]).addTo(mapInstanceRef.current);
-        
-        // Popup com o nome da linha ou ID da inspeção
-        marker.bindPopup(`<b>${image.results?.lineName || 'Inspeção'}</b><br>${image.id}`).openPopup();
+        marker.bindPopup(`<b>${image.results?.lineName || 'Inspeção'}</b><br>${image.id}`);
       }
     }
 
-    // Cleanup: Destruir mapa ao desmontar componente
     return () => {
       if (mapInstanceRef.current) {
         mapInstanceRef.current.remove();
@@ -74,7 +67,9 @@ const InspectionCard: React.FC<InspectionCardProps> = ({ image }) => {
   }, [hasGeo, image.results, image.id]);
 
   return (
-    <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden flex flex-col hover:shadow-md transition-shadow group relative">
+    <div className={`bg-white rounded-xl shadow-sm border transition-all duration-300 overflow-hidden flex flex-col hover:shadow-md group relative
+      ${image.status === 'error' ? 'border-red-200 bg-red-50/10' : 'border-slate-200'}
+    `}>
       <div className="relative h-56 w-full bg-slate-100 overflow-hidden">
         {isFromHistory ? (
           <div className="h-full w-full flex flex-col items-center justify-center bg-slate-200 text-slate-400 p-4 text-center">
@@ -82,17 +77,17 @@ const InspectionCard: React.FC<InspectionCardProps> = ({ image }) => {
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
             </svg>
             <span className="text-[10px] font-bold uppercase tracking-wider">Histórico</span>
-            <span className="text-[8px] mt-1 leading-tight">Foto indisponível na sessão atual</span>
+            <span className="text-[8px] mt-1 leading-tight">Foto indisponível</span>
           </div>
         ) : (
           <img 
             src={image.previewUrl} 
-            alt="Inspection thumbnail" 
-            className="h-full w-full object-cover"
+            alt="Inspection" 
+            className={`h-full w-full object-cover transition-transform duration-500 group-hover:scale-105 ${image.status === 'processing' ? 'blur-sm grayscale' : ''}`}
           />
         )}
         
-        {/* Visual Markers Layer */}
+        {/* Camada de Marcações de IA */}
         {!isFromHistory && image.status === 'completed' && image.results?.foundAnomalies.map((anomaly, idx) => (
           anomaly.boundingBox && (
             <div
@@ -112,8 +107,9 @@ const InspectionCard: React.FC<InspectionCardProps> = ({ image }) => {
         ))}
 
         {image.status === 'processing' && (
-          <div className="absolute inset-0 bg-white/60 flex items-center justify-center z-30">
-            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+          <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-[2px] flex flex-col items-center justify-center z-30">
+            <div className="animate-spin rounded-full h-10 w-10 border-4 border-blue-400 border-t-transparent mb-2"></div>
+            <span className="text-white text-[10px] font-bold uppercase tracking-widest animate-pulse">Analisando...</span>
           </div>
         )}
         
@@ -126,41 +122,46 @@ const InspectionCard: React.FC<InspectionCardProps> = ({ image }) => {
             )}
             {hasGeo && (
               <span className="bg-blue-600/80 text-white text-[9px] px-1.5 py-0.5 rounded font-medium backdrop-blur-sm flex items-center gap-1">
-                📍 Ativo GPS
+                📍 GPS Ativo
               </span>
             )}
           </div>
         )}
 
-        {image.status === 'completed' && image.results?.foundAnomalies.length === 0 && (
-          <div className="absolute top-2 right-2 bg-green-500 text-white text-[10px] px-2 py-1 rounded-full font-bold uppercase shadow-sm z-30">
-            OK
-          </div>
-        )}
-        
-        {image.status === 'completed' && (image.results?.foundAnomalies.length || 0) > 0 && (
-          <div className="absolute top-2 right-2 bg-red-500 text-white text-[10px] px-2 py-1 rounded-full font-bold uppercase shadow-sm z-30">
-            {image.results?.foundAnomalies.length} Anomalia(s)
+        {image.status === 'completed' && (
+          <div className={`absolute top-2 right-2 text-white text-[10px] px-2 py-1 rounded-full font-bold uppercase shadow-lg z-30 
+            ${(image.results?.foundAnomalies.length || 0) > 0 ? 'bg-red-600' : 'bg-green-600'}`}>
+            {(image.results?.foundAnomalies.length || 0) > 0 ? `${image.results?.foundAnomalies.length} Falhas` : 'Normal'}
           </div>
         )}
       </div>
 
       <div className="p-4 flex-1 flex flex-col">
-        <h3 className="text-sm font-semibold text-slate-800 truncate mb-1">
+        <h3 className="text-sm font-bold text-slate-800 truncate mb-1 flex items-center justify-between">
           {image.id.toUpperCase()}
+          {image.status === 'error' && (
+            <button 
+              onClick={() => onRetry?.(image.id)}
+              className="text-blue-600 text-[10px] font-bold hover:underline"
+            >
+              Reprocessar
+            </button>
+          )}
         </h3>
         
-        {image.status === 'pending' && (
-          <p className="text-xs text-slate-500 italic">Aguardando...</p>
-        )}
+        {image.status === 'pending' && <p className="text-xs text-slate-400 italic">Aguardando início...</p>}
         
         {image.status === 'error' && (
-          <p className="text-[10px] leading-tight text-red-600 bg-red-50 p-1.5 rounded border border-red-100">{image.error || 'Erro no processamento'}</p>
+          <div className="mt-1">
+            <p className="text-[11px] leading-tight text-red-600 bg-red-50 p-2 rounded-lg border border-red-100 font-medium">
+              {image.error || 'Erro inesperado na análise da imagem.'}
+            </p>
+          </div>
         )}
 
         {image.status === 'completed' && image.results && (
-          <div className="space-y-3">
-            <p className="text-[11px] text-slate-600 line-clamp-2 italic border-l-2 border-slate-200 pl-2 leading-snug">
+          <div className="space-y-3 flex-1 flex flex-col">
+            <p className="text-[11px] text-slate-600 line-clamp-2 italic border-l-2 border-blue-200 pl-2 leading-snug">
               "{image.results.summary}"
             </p>
             
@@ -168,52 +169,42 @@ const InspectionCard: React.FC<InspectionCardProps> = ({ image }) => {
               {image.results.foundAnomalies.slice(0, 3).map((anomaly, idx) => (
                 <div 
                   key={idx} 
-                  className={`flex items-start justify-between gap-2 p-1 rounded transition-colors
-                    ${hoveredAnomaly === anomaly ? 'bg-slate-50' : ''}
+                  className={`flex items-start justify-between gap-2 p-1.5 rounded-lg transition-colors
+                    ${hoveredAnomaly === anomaly ? 'bg-slate-100' : 'bg-slate-50'}
                   `}
                   onMouseEnter={() => setHoveredAnomaly(anomaly)}
                   onMouseLeave={() => setHoveredAnomaly(null)}
                 >
-                  <div className="flex-1 min-w-0">
-                    <p className="text-[10px] font-bold text-slate-700 truncate">
-                      {anomaly.type}
-                    </p>
-                  </div>
-                  <span className={`text-[8px] px-1 py-0.5 rounded font-bold uppercase shrink-0 ${getSeverityColor(anomaly.severity)}`}>
+                  <p className="text-[10px] font-bold text-slate-700 truncate flex-1">{anomaly.type}</p>
+                  <span className={`text-[8px] px-1.5 py-0.5 rounded font-black uppercase shrink-0 ${getSeverityColor(anomaly.severity)}`}>
                     {anomaly.severity}
                   </span>
                 </div>
               ))}
               {image.results.foundAnomalies.length > 3 && (
-                <p className="text-[9px] text-slate-400 font-medium text-center">+{image.results.foundAnomalies.length - 3} itens</p>
+                <p className="text-[9px] text-slate-400 font-bold text-center uppercase tracking-tight">+{image.results.foundAnomalies.length - 3} itens detectados</p>
               )}
             </div>
             
-            {/* Mapa Interativo em substituição ao link */}
-            <div className="mt-auto pt-2 border-t border-slate-100 flex flex-col gap-2">
+            <div className="mt-auto pt-3 border-t border-slate-100">
               {hasGeo ? (
                 <div className="space-y-2">
                   <div className="flex justify-between items-center">
-                    <span className="text-[9px] font-bold text-slate-400 uppercase tracking-tight">Geolocalização</span>
+                    <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest">MAPA DE CAMPO</span>
                     <a 
                       href={`https://www.google.com/maps?q=${image.results.latitude},${image.results.longitude}`} 
                       target="_blank"
-                      className="text-blue-600 text-[9px] hover:underline"
+                      className="text-blue-600 text-[10px] font-bold hover:underline"
                     >
-                      Abrir no Google Maps
+                      Ver GPS ↗
                     </a>
                   </div>
-                  <div 
-                    ref={mapContainerRef} 
-                    className="h-28 w-full rounded-lg border border-slate-200 shadow-inner bg-slate-50"
-                  />
+                  <div ref={mapContainerRef} className="h-28 w-full rounded-xl border border-slate-200 shadow-inner bg-slate-50 overflow-hidden" />
                 </div>
               ) : (
-                <div className="flex items-center justify-between">
-                  <span className="text-slate-300 text-[9px] uppercase font-bold">Sem Localização</span>
-                  {isFromHistory && (
-                    <span className="text-[8px] font-bold text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded">HISTÓRICO</span>
-                  )}
+                <div className="flex items-center justify-between py-1">
+                  <span className="text-slate-300 text-[9px] uppercase font-black tracking-widest">Sem Coordenadas</span>
+                  {isFromHistory && <span className="text-[8px] font-black text-slate-400 bg-slate-100 px-2 py-0.5 rounded-full">DB</span>}
                 </div>
               )}
             </div>
