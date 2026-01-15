@@ -13,6 +13,12 @@
         background-color: #f8fafc;
       }
     </style>
+    <script>
+      // Shim básico para evitar quebras em ambientes que não injetam o objeto process
+      if (typeof window.process === 'undefined') {
+        window.process = { env: {} };
+      }
+    </script>
   <script type="importmap">
 {
   "imports": {
@@ -26,5 +32,6 @@
 </head>
   <body>
     <div id="root"></div>
+    <script type="module" src="./index.tsx"></script>
   </body>
 </html>

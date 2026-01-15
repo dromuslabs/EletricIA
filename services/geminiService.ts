@@ -59,14 +59,8 @@ const responseSchema = {
   required: ["foundAnomalies", "summary", "safeToOperate"]
 };
 
-/**
- * Utilitário para pausa (delay)
- */
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
-/**
- * Executa uma função com retry e exponential backoff para lidar com limites de cota (429).
- */
 async function withRetry<T>(fn: () => Promise<T>, maxRetries = 3, initialDelay = 2000): Promise<T> {
   let lastError: any;
   for (let i = 0; i < maxRetries; i++) {
@@ -74,11 +68,10 @@ async function withRetry<T>(fn: () => Promise<T>, maxRetries = 3, initialDelay =
       return await fn();
     } catch (error: any) {
       lastError = error;
-      const isQuotaError = error?.message?.includes('429') || error?.status === 429 || JSON.stringify(error).includes('429');
+      const status = error?.status || (error?.message?.includes('429') ? 429 : 0);
       
-      if (isQuotaError && i < maxRetries - 1) {
+      if (status === 429 && i < maxRetries - 1) {
         const delay = initialDelay * Math.pow(2, i);
-        console.warn(`Cota excedida. Tentando novamente em ${delay}ms... (Tentativa ${i + 1}/${maxRetries})`);
         await sleep(delay);
         continue;
       }
@@ -88,26 +81,24 @@ async function withRetry<T>(fn: () => Promise<T>, maxRetries = 3, initialDelay =
   throw lastError;
 }
 
-/**
- * Analisa uma imagem de inspeção usando o modelo Gemini.
- */
 export async function analyzeInspectionImage(base64Data: string, mimeType: string) {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
+  // Inicializa o cliente dentro da função para garantir o uso da chave configurada no ambiente
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
   
   const prompt = `
-    Você é um especialista em inspeção industrial de linhas de transmissão de energia elétrica.
-    Analise esta imagem capturada por drone e:
-    1. Identifique anomalias (Cabos soltos, parafusos frouxos, trincas, corrosão).
-    2. LOCALIZAÇÃO ESPACIAL: Para cada anomalia, forneça o boundingBox [ymin, xmin, ymax, xmax] (0-1000).
-    3. OCR DE METADADOS: Observe atentamente o canto superior esquerdo da imagem. Extraia as informações de Latitude, Longitude e o Nome da Linha de Transmissão que estão escritos na legenda sobreposta.
-    4. Formate a Latitude e Longitude como números decimais se possível.
-
-    Se não houver anomalias, retorne a lista vazia, mas ainda extraia os metadados da legenda.
+    Você é um especialista em inspeção industrial de linhas de transmissão.
+    Analise esta imagem de drone e forneça um relatório técnico rigoroso.
+    
+    1. DETECÇÃO VISUAL: Identifique parafusos soltos, corrosão, cabos danificados ou trincas.
+    2. LOCALIZAÇÃO: Para cada anomalia, defina o boundingBox exato [ymin, xmin, ymax, xmax].
+    3. METADADOS: Leia o canto superior esquerdo e extraia Latitude, Longitude e o Nome da Linha.
+    
+    Retorne estritamente um JSON que siga o schema definido.
   `;
 
   return withRetry(async () => {
     const response: GenerateContentResponse = await ai.models.generateContent({
-      model: 'gemini-3-flash-preview',
+      model: 'gemini-3-pro-preview',
       contents: {
         parts: [
           { text: prompt },
@@ -125,8 +116,11 @@ export async function analyzeInspectionImage(base64Data: string, mimeType: strin
       }
     });
 
-    const result = JSON.parse(response.text || '{}');
-    return result;
+    if (!response.text) throw new Error("Resposta vazia da IA");
+    
+    // Limpeza de possíveis marcadores markdown que a IA possa incluir por engano
+    const cleanJson = response.text.replace(/```json/g, '').replace(/```/g, '').trim();
+    return JSON.parse(cleanJson);
   });
 }
 
@@ -134,10 +128,7 @@ export async function fileToBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.readAsDataURL(file);
-    reader.onload = () => {
-      const base64String = (reader.result as string).split(',')[1];
-      resolve(base64String);
-    };
+    reader.onload = () => resolve((reader.result as string).split(',')[1]);
     reader.onerror = (error) => reject(error);
   });
 }
