@@ -1,9 +1,10 @@
 
 export enum AnomalyType {
-  LOOSE_CABLE = 'Cabo Solto',
-  LOOSE_BOLT = 'Parafuso Solto',
-  CRACK = 'Trinca/Rachadura',
-  CORROSION = 'Corrosão',
+  INSULATOR = 'Isolador',
+  CONDUCTOR = 'Condutor',
+  STRUCTURE = 'Estrutura',
+  VEGETATION = 'Vegetação',
+  HARDWARE = 'Ferragem',
   OTHER = 'Outro'
 }
 
@@ -15,16 +16,21 @@ export enum Severity {
 }
 
 export interface Anomaly {
-  type: AnomalyType;
+  type: string;
   description: string;
   severity: Severity;
   location_hint?: string;
-  boundingBox?: [number, number, number, number]; // [ymin, xmin, ymax, xmax] normalized 0-1000
+  boundingBox?: [number, number, number, number];
 }
 
 export interface ApiSettings {
   mode: 'sdk' | 'custom';
   customEndpoint: string;
+}
+
+export interface UserFeedback {
+  status?: 'approved' | 'rejected';
+  comments?: string;
 }
 
 export interface InspectionImage {
@@ -40,6 +46,7 @@ export interface InspectionImage {
     longitude?: string;
     lineName?: string;
   };
+  userFeedback?: UserFeedback;
   error?: string;
 }
 

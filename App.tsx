@@ -1,245 +1,235 @@
 
-import React, { useState, useCallback, useRef, useMemo, useEffect } from 'react';
-import { InspectionImage, Severity, ApiSettings } from './types';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
+import { InspectionImage, ApiSettings, UserFeedback } from './types';
 import Header from './components/Header';
 import InspectionCard from './components/InspectionCard';
 import { analyzeInspectionImage, fileToBase64 } from './services/geminiService';
 import { generateHtmlReport } from './services/reportService';
 
-const STORAGE_KEY = 'droneguard_inspections_v1';
-const SETTINGS_KEY = 'droneguard_settings_v1';
+const STORAGE_KEY = 'dg_cache_v2';
+const INITIAL_CREDITS = 100;
+
+declare global {
+  interface AIStudio {
+    hasSelectedApiKey: () => Promise<boolean>;
+    openSelectKey: () => Promise<void>;
+  }
+  interface Window {
+    aistudio?: AIStudio;
+  }
+}
 
 const App: React.FC = () => {
   const [images, setImages] = useState<InspectionImage[]>([]);
-  const [apiSettings, setApiSettings] = useState<ApiSettings>({ mode: 'sdk', customEndpoint: '' });
   const [showSettings, setShowSettings] = useState(false);
+  const [credits, setCredits] = useState<number>(INITIAL_CREDITS);
   const [isProcessingAll, setIsProcessingAll] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [batchProgress, setBatchProgress] = useState({ current: 0, total: 0 });
+  const [currentProcessingFile, setCurrentProcessingFile] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    const savedImgs = localStorage.getItem(STORAGE_KEY);
-    if (savedImgs) {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    if (saved) {
       try {
-        const parsed: InspectionImage[] = JSON.parse(savedImgs);
-        setImages(parsed.map(img => ({ 
-          ...img, 
-          status: img.status === 'processing' ? 'pending' : img.status, 
-          previewUrl: img.previewUrl || '' 
-        })));
-      } catch (e) { console.error(e); }
-    }
-    const savedSettings = localStorage.getItem(SETTINGS_KEY);
-    if (savedSettings) {
-      try { setApiSettings(JSON.parse(savedSettings)); } catch (e) { console.error(e); }
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          setImages(parsed.map((img: any) => ({ 
+            ...img, 
+            status: img.status === 'processing' ? 'pending' : img.status,
+            previewUrl: img.previewUrl?.startsWith('blob:') ? '' : img.previewUrl
+          })));
+        }
+      } catch (e) { 
+        localStorage.removeItem(STORAGE_KEY); 
+      }
     }
   }, []);
 
   useEffect(() => {
-    localStorage.setItem(SETTINGS_KEY, JSON.stringify(apiSettings));
-  }, [apiSettings]);
-
-  useEffect(() => {
-    const toSave = images.map(({ file, previewUrl, ...rest }) => rest);
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(toSave));
+    if (images.length === 0) {
+      localStorage.removeItem(STORAGE_KEY);
+    } else {
+      const toSave = images.map(({ file, ...rest }) => rest);
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(toSave));
+    }
   }, [images]);
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files) return;
-    
     const newImages: InspectionImage[] = Array.from(files).map((file: File) => ({
-      id: Math.random().toString(36).substring(2, 11),
+      id: Math.random().toString(36).substring(2, 9).toUpperCase(),
       file: file,
       previewUrl: URL.createObjectURL(file),
-      status: 'pending' as const
+      status: 'pending' as const,
+      userFeedback: { comments: '' }
     }));
-
     setImages(prev => [...prev, ...newImages]);
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
+  const handleUpdateFeedback = (id: string, feedback: UserFeedback) => {
+    setImages(prev => prev.map(img => 
+      img.id === id ? { ...img, userFeedback: { ...img.userFeedback, ...feedback } } : img
+    ));
+  };
+
+  const clearInspection = useCallback(() => {
+    if (window.confirm('Deseja limpar todas as fotos e iniciar uma nova inspeção?')) {
+      images.forEach(img => {
+        if (img.previewUrl?.startsWith('blob:')) {
+          URL.revokeObjectURL(img.previewUrl);
+        }
+      });
+      setImages([]);
+      localStorage.removeItem(STORAGE_KEY);
+      setBatchProgress({ current: 0, total: 0 });
+      setIsProcessingAll(false);
+    }
+  }, [images]);
+
   const processImage = async (img: InspectionImage): Promise<boolean> => {
-    if (!img.file && !img.previewUrl) return true;
-
+    if (!img.file) {
+      setImages(prev => prev.map(i => i.id === img.id ? { ...i, status: 'error', error: "Arquivo original não disponível. Por favor, re-adicione a foto." } : i));
+      return false;
+    }
     setImages(prev => prev.map(i => i.id === img.id ? { ...i, status: 'processing', error: undefined } : i));
-    
     try {
-      let base64 = '';
-      if (img.file) {
-        base64 = await fileToBase64(img.file);
-      } else {
-        throw new Error("Arquivo original não disponível.");
-      }
-
-      const results = await analyzeInspectionImage(base64, img.file.type, apiSettings);
+      const base64 = await fileToBase64(img.file);
+      const results = await analyzeInspectionImage(base64, img.file.type, { mode: 'sdk', customEndpoint: '' });
       setImages(prev => prev.map(i => i.id === img.id ? { ...i, status: 'completed', results } : i));
+      setCredits(prev => Math.max(0, prev - 1));
       return true;
     } catch (error: any) {
-      const msg = error.message || 'Erro inesperado';
-      setImages(prev => prev.map(i => i.id === img.id ? { ...i, status: 'error', error: msg } : i));
+      if (error.message === 'API_KEY_REQUIRED' && window.aistudio) {
+        await window.aistudio.openSelectKey();
+        return processImage(img);
+      }
+      setImages(prev => prev.map(i => i.id === img.id ? { ...i, status: 'error', error: error.message } : i));
       return false;
     }
   };
 
-  const handleRetry = (id: string) => {
-    const img = images.find(i => i.id === id);
-    if (img) processImage(img);
-  };
-
   const handleProcessAll = async () => {
-    const pending = images.filter(img => (img.status === 'pending' || img.status === 'error') && img.file);
+    const pending = images.filter(img => (img.status === 'pending' || img.status === 'error'));
     if (pending.length === 0) return;
-    
     setIsProcessingAll(true);
     setBatchProgress({ current: 0, total: pending.length });
-
     for (let i = 0; i < pending.length; i++) {
-      await processImage(pending[i]);
+      const current = pending[i];
+      setCurrentProcessingFile(current.file?.name || current.id);
+      await processImage(current);
       setBatchProgress(prev => ({ ...prev, current: i + 1 }));
-      await new Promise(r => setTimeout(r, 1200)); // Delay ligeiramente maior para evitar 429
     }
-    
     setIsProcessingAll(false);
+    setCurrentProcessingFile(null);
   };
 
-  const handleExportReport = () => {
-    if (images.length === 0) return;
+  const handleExportReport = async () => {
+    const completed = images.filter(img => img.status === 'completed' && img.results);
+    if (completed.length === 0) {
+      alert("Realize ao menos uma inspeção completa antes de exportar.");
+      return;
+    }
     setIsExporting(true);
     try {
-      const htmlContent = generateHtmlReport(images);
+      const htmlContent = await generateHtmlReport(images);
       const blob = new Blob([htmlContent], { type: 'text/html' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `relatorio-inspecao-${new Date().getTime()}.html`;
+      a.download = `Relatorio-DroneGuard-${new Date().getTime()}.html`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error(err);
+      alert("Falha ao gerar o laudo técnico.");
     } finally {
       setIsExporting(false);
     }
   };
 
-  const stats = useMemo(() => ({
-    total: images.length,
-    processed: images.filter(i => i.status === 'completed').length,
-    anomalies: images.reduce((acc, i) => acc + (i.results?.foundAnomalies.length || 0), 0)
-  }), [images]);
-
   return (
-    <div className="min-h-screen flex flex-col bg-slate-50">
+    <div className="min-h-screen bg-black text-zinc-100 font-sans selection:bg-blue-500/30">
       <Header onOpenSettings={() => setShowSettings(true)} />
-      
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <div className="flex flex-col lg:flex-row lg:items-center justify-between mb-8 gap-6">
-          <div>
-            <h2 className="text-3xl font-black text-slate-900 tracking-tighter uppercase">Painel de Inspeção</h2>
-            <div className="flex items-center gap-2 mt-1">
-              <span className={`w-2 h-2 rounded-full animate-pulse ${apiSettings.mode === 'sdk' ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)]' : 'bg-indigo-500'}`}></span>
-              <p className="text-slate-500 text-[10px] font-black uppercase tracking-widest">Motor: {apiSettings.mode === 'sdk' ? 'Gemini 3 Flash AI' : 'Custom Server'}</p>
+      <main className="max-w-7xl mx-auto px-6 py-12">
+        <div className="flex flex-col lg:flex-row justify-between items-start lg:items-end gap-8 mb-16">
+          <div className="space-y-4">
+            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-blue-500/10 border border-blue-500/20 text-blue-400 text-[10px] font-black uppercase tracking-[0.2em]">
+              <span className="relative flex h-2 w-2">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-blue-500"></span>
+              </span>
+              Hybrid Human-AI Diagnostics
             </div>
+            <h2 className="text-5xl sm:text-7xl font-black text-white uppercase italic tracking-tighter leading-none">
+              Contr<span className="text-zinc-800">ole</span><br/>
+              Técni<span className="text-blue-500">co</span>
+            </h2>
           </div>
           <div className="flex gap-4">
-            <div className="bg-white px-5 py-3 rounded-2xl border border-slate-200 shadow-sm min-w-[120px]">
-              <p className="text-[10px] text-slate-400 font-black uppercase tracking-widest">Total Fotos</p>
-              <p className="text-2xl font-black text-slate-800 tracking-tight">{stats.total}</p>
+            <div className="bg-zinc-900/50 border border-zinc-800 rounded-2xl p-6 min-w-[140px] backdrop-blur-xl">
+              <p className="text-[10px] text-zinc-500 font-black uppercase mb-2 tracking-widest">Saldo API</p>
+              <span className="text-3xl font-black text-white font-mono">{credits}</span>
             </div>
-            <div className="bg-white px-5 py-3 rounded-2xl border border-slate-200 shadow-sm min-w-[120px]">
-              <p className="text-[10px] text-slate-400 font-black uppercase tracking-widest">Incidentes</p>
-              <p className="text-2xl font-black text-red-600 tracking-tight">{stats.anomalies}</p>
+            <div className="bg-zinc-900/50 border border-zinc-800 rounded-2xl p-6 min-w-[140px] backdrop-blur-xl">
+              <p className="text-[10px] text-zinc-500 font-black uppercase mb-2 tracking-widest">Alertas</p>
+              <span className="text-3xl font-black text-blue-500 font-mono">
+                {images.reduce((acc, i) => acc + (i.results?.foundAnomalies.length || 0), 0)}
+              </span>
             </div>
           </div>
         </div>
 
-        <div className="bg-white/80 p-5 rounded-3xl shadow-xl border border-white backdrop-blur-xl mb-8 flex flex-col sm:flex-row items-center justify-between gap-4 sticky top-20 z-40">
-          <button 
-            onClick={() => fileInputRef.current?.click()}
-            className="w-full sm:w-auto bg-blue-600 hover:bg-blue-700 text-white px-10 py-4 rounded-2xl font-black uppercase tracking-widest text-[11px] shadow-lg shadow-blue-200 transition-all hover:scale-[1.02] active:scale-95 h-14"
-          >
-            Carregar Imagens
-          </button>
+        <div className="flex flex-wrap items-center gap-4 mb-12 p-2 bg-zinc-900/30 border border-zinc-800 rounded-3xl sticky top-24 z-40 backdrop-blur-md">
+          <button onClick={() => fileInputRef.current?.click()} className="flex-1 sm:flex-none bg-white text-black px-8 py-3.5 rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-zinc-200 transition-all active:scale-95 shadow-lg">Adicionar Fotos</button>
           <input type="file" ref={fileInputRef} className="hidden" multiple accept="image/*" onChange={handleFileUpload} />
-
-          <div className="flex gap-3 w-full sm:w-auto">
-            <button 
-              disabled={isProcessingAll || images.filter(i => (i.status === 'pending' || i.status === 'error') && i.file).length === 0}
-              onClick={handleProcessAll}
-              className="flex-1 sm:flex-none bg-slate-900 hover:bg-black disabled:bg-slate-100 disabled:text-slate-400 text-white px-10 py-4 rounded-2xl font-black uppercase tracking-widest text-[11px] h-14 transition-all shadow-xl"
-            >
-              {isProcessingAll ? 'Processando...' : 'Análise Geral'}
-            </button>
-            <button 
-              disabled={images.length === 0 || isExporting}
-              onClick={handleExportReport}
-              className="bg-white border border-slate-200 px-8 py-4 rounded-2xl text-slate-700 font-black uppercase tracking-widest text-[11px] hover:bg-slate-50 h-14 shadow-sm"
-            >
-              Laudo HTML
-            </button>
-            <button onClick={() => { setImages([]); localStorage.removeItem(STORAGE_KEY); }} className="text-slate-400 hover:text-red-500 font-black text-[10px] uppercase tracking-widest px-4 transition-colors">
-              Zerar
-            </button>
-          </div>
+          <button disabled={images.filter(i => i.status === 'pending' || i.status === 'error').length === 0 || isProcessingAll} onClick={handleProcessAll} className="flex-1 sm:flex-none bg-blue-600 hover:bg-blue-500 text-white px-8 py-3.5 rounded-2xl font-black text-xs uppercase tracking-widest disabled:opacity-20 transition-all">Iniciar Análise</button>
+          <button disabled={images.filter(i => i.status === 'completed').length === 0 || isExporting} onClick={handleExportReport} className="flex-1 sm:flex-none bg-zinc-900 border border-zinc-800 text-zinc-100 px-8 py-3.5 rounded-2xl font-black text-xs uppercase tracking-widest transition-all">Exportar Relatório</button>
+          <div className="h-8 w-[1px] bg-zinc-800 hidden sm:block mx-2"></div>
+          <button onClick={clearInspection} disabled={images.length === 0 || isProcessingAll} className="flex-1 sm:flex-none bg-zinc-950 border border-zinc-800 text-zinc-500 hover:text-red-500 px-8 py-3.5 rounded-2xl font-black text-xs uppercase tracking-widest transition-all">Nova Inspeção</button>
         </div>
 
         {isProcessingAll && (
-          <div className="mb-10 space-y-3 bg-blue-50/50 p-6 rounded-3xl border border-blue-100">
-            <div className="flex justify-between items-end">
-              <div>
-                <p className="text-[10px] font-black text-blue-800 uppercase tracking-[0.2em] mb-1">Status do Lote</p>
-                <h4 className="text-xl font-black text-blue-900 tracking-tight">Processando Arquivos</h4>
-              </div>
-              <span className="text-blue-900 font-black text-lg">{batchProgress.current} <span className="text-blue-400 text-sm">/ {batchProgress.total}</span></span>
+          <div className="mb-12 p-8 bg-zinc-900/50 border border-blue-500/20 rounded-3xl">
+            <div className="flex justify-between items-end mb-4">
+              <span className="text-[10px] text-blue-400 font-black uppercase tracking-widest">Analisando: {currentProcessingFile}</span>
+              <span className="text-3xl font-black font-mono text-white">{batchProgress.current}/{batchProgress.total}</span>
             </div>
-            <div className="w-full bg-blue-200/50 rounded-full h-3 overflow-hidden p-0.5">
-              <div className="bg-blue-600 h-full rounded-full transition-all duration-700 shadow-[0_0_12px_rgba(37,99,235,0.4)]" style={{ width: `${(batchProgress.current / batchProgress.total) * 100}%` }}></div>
+            <div className="h-1 bg-zinc-800 rounded-full overflow-hidden">
+              <div className="h-full bg-blue-500 transition-all duration-700 shadow-[0_0_15px_rgba(59,130,246,0.6)]" style={{ width: `${(batchProgress.current/batchProgress.total)*100}%` }} />
             </div>
           </div>
         )}
 
-        {images.length === 0 ? (
-          <div className="bg-white border-2 border-dashed border-slate-200 rounded-[40px] p-24 text-center flex flex-col items-center justify-center group hover:border-blue-300 transition-colors">
-             <div className="w-20 h-20 bg-slate-50 rounded-full flex items-center justify-center mb-6 group-hover:bg-blue-50 transition-colors">
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-10 w-10 text-slate-300 group-hover:text-blue-400 transition-colors" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                </svg>
-             </div>
-             <p className="text-slate-400 font-black uppercase tracking-widest text-xs">Arraste fotos ou clique em carregar para iniciar a varredura.</p>
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-8">
-            {images.map(img => <InspectionCard key={img.id} image={img} onRetry={handleRetry} />)}
-          </div>
-        )}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+          {images.map(img => (
+            <InspectionCard 
+              key={img.id} 
+              image={img} 
+              onRetry={processImage} 
+              onUpdateFeedback={(fb) => handleUpdateFeedback(img.id, fb)}
+            />
+          ))}
+          {images.length === 0 && (
+            <div onClick={() => fileInputRef.current?.click()} className="col-span-full py-40 flex flex-col items-center justify-center border-2 border-dashed border-zinc-800 rounded-[3rem] opacity-30 cursor-pointer">
+              <p className="text-zinc-500 font-black uppercase tracking-[0.3em] text-[10px]">Aguardando Capturas</p>
+            </div>
+          )}
+        </div>
       </main>
 
       {showSettings && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-slate-900/80 backdrop-blur-md">
-          <div className="bg-white rounded-[40px] shadow-2xl w-full max-w-md overflow-hidden animate-in fade-in zoom-in duration-300">
-            <div className="p-8 border-b border-slate-50 flex justify-between items-center bg-slate-50/50">
-              <h3 className="text-2xl font-black tracking-tight">Preferências</h3>
-              <button onClick={() => setShowSettings(false)} className="bg-white w-10 h-10 rounded-full flex items-center justify-center shadow-sm hover:bg-red-50 hover:text-red-500 transition-colors font-bold">✕</button>
-            </div>
-            <div className="p-10 space-y-6">
-              <div className="grid grid-cols-2 gap-4">
-                <button onClick={() => setApiSettings({ ...apiSettings, mode: 'sdk' })} className={`py-6 rounded-3xl border-2 font-black uppercase tracking-widest text-[10px] transition-all ${apiSettings.mode === 'sdk' ? 'border-blue-600 bg-blue-50 text-blue-700' : 'border-slate-100 hover:border-slate-300'}`}>Cloud AI (SDK)</button>
-                <button onClick={() => setApiSettings({ ...apiSettings, mode: 'custom' })} className={`py-6 rounded-3xl border-2 font-black uppercase tracking-widest text-[10px] transition-all ${apiSettings.mode === 'custom' ? 'border-blue-600 bg-blue-50 text-blue-700' : 'border-slate-100 hover:border-slate-300'}`}>Proxy Local</button>
-              </div>
-              {apiSettings.mode === 'custom' && (
-                <div className="space-y-2">
-                  <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-1">URL do Endpoint</label>
-                  <input 
-                    type="text" 
-                    value={apiSettings.customEndpoint} 
-                    onChange={e => setApiSettings({...apiSettings, customEndpoint: e.target.value})}
-                    className="w-full p-4 bg-slate-50 border-none rounded-2xl focus:ring-2 ring-blue-500 transition-all font-medium"
-                    placeholder="https://api.v1.local/analyze"
-                  />
-                </div>
-              )}
-              <button onClick={() => setShowSettings(false)} className="w-full bg-slate-900 hover:bg-black text-white py-5 rounded-2xl font-black uppercase tracking-widest text-[11px] shadow-xl transition-all active:scale-95">Aplicar Alterações</button>
+        <div className="fixed inset-0 bg-black/95 backdrop-blur-sm z-[100] flex items-center justify-center p-6">
+          <div className="bg-zinc-950 border border-zinc-800 p-12 rounded-[3rem] max-w-md w-full shadow-2xl relative">
+            <h3 className="text-3xl font-black text-white uppercase italic tracking-tighter mb-8">Preferências</h3>
+            <div className="space-y-4">
+              <button onClick={async () => { if(window.aistudio) await window.aistudio.openSelectKey(); setShowSettings(false); }} className="w-full bg-white text-black py-4 rounded-2xl font-black text-xs uppercase tracking-widest">Gerenciar API Key</button>
+              <button onClick={() => setShowSettings(false)} className="w-full bg-zinc-900 border border-zinc-800 text-white py-4 rounded-2xl font-black text-xs uppercase tracking-widest">Voltar</button>
             </div>
           </div>
         </div>
